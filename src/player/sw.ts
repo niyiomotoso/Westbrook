@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 import { defaultCache } from "@serwist/next/worker";
 import type { PrecacheEntry, SerwistGlobalConfig } from "serwist";
-import { CacheFirst, NetworkOnly, Serwist } from "serwist";
+import { CacheFirst, NetworkFirst, NetworkOnly, Serwist } from "serwist";
 
 declare global {
   interface WorkerGlobalScope extends SerwistGlobalConfig {
@@ -19,6 +19,16 @@ const serwist = new Serwist({
   clientsClaim: true,
   navigationPreload: true,
   runtimeCaching: [
+    {
+      // Navigations (the player document): network-first with a cached
+      // fallback so an offline reload/boot still opens the wall (R11).
+      matcher: ({ request, url }) =>
+        request.mode === "navigate" && !url.pathname.startsWith("/backoffice"),
+      handler: new NetworkFirst({
+        cacheName: "wall-pages",
+        networkTimeoutSeconds: 5,
+      }),
+    },
     {
       // Content-hashed, immutable images: cache-first forever. This cache
       // is also the R27 pre-download target — "downloaded" and "cached"

@@ -1,7 +1,10 @@
 "use client";
 
-import { Suspense, useMemo } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { loadPlayerConfig, type PlayerConfig } from "@/player/config";
+import { useKiosk } from "@/player/kiosk";
+import { PinGate, SetupScreen } from "@/player/setup";
 import { Screen } from "@/player/Screen";
 import { SlideLayer } from "@/player/SlideLayer";
 import { LeftOverlay } from "@/player/overlays/LeftOverlay";
@@ -16,17 +19,41 @@ import type { Snapshot } from "@/lib/snapshot-types";
 
 function PlayerInner() {
   const params = useSearchParams();
-  // Position: 0 left, 1 middle, 2 right. Interim ?p= override until the
-  // first-run setup screen (U11) owns device config.
-  const position = Math.min(2, Math.max(0, Number(params.get("p") ?? 0)));
+  // Device config (position, screen key, PIN) from first-run setup (R15).
+  // ?p= remains a QA override that skips kiosk mode entirely.
+  const pParam = params.get("p");
+  const [config, setConfig] = useState<PlayerConfig | null>(null);
+  const [configLoaded, setConfigLoaded] = useState(false);
+  const [showSetup, setShowSetup] = useState(false);
+
+  useEffect(() => {
+    setConfig(loadPlayerConfig());
+    setConfigLoaded(true);
+  }, []);
+
+  const clock = useWallClock();
+  const polled = usePolledSnapshot(clock);
+
+  const kioskConfig = pParam === null ? config : null;
+  const { gestureFired, resetGesture } = useKiosk(kioskConfig, () =>
+    polledTimezoneRef.current,
+  );
+
+  const position =
+    pParam !== null
+      ? Math.min(2, Math.max(0, Number(pParam)))
+      : (config?.position ?? 0);
   const seasonParam = params.get("season");
   const seasonOverride =
     seasonParam === "xmas" || seasonParam === "indep" || seasonParam === "none"
       ? (seasonParam as Season)
       : undefined;
 
-  const clock = useWallClock();
-  const polled = usePolledSnapshot(clock);
+  // Nightly-reload timezone follows settings without re-binding the kiosk.
+  const polledTimezoneRef = useRef("Africa/Lagos");
+  useEffect(() => {
+    if (polled?.settings.timezone) polledTimezoneRef.current = polled.settings.timezone;
+  }, [polled?.settings.timezone]);
 
   // Message demo override (?msg=pic|plain) — a 12s takeover starting shortly
   // after load, for QA until the back office posts real messages (U9).
@@ -51,19 +78,44 @@ function PlayerInner() {
     };
   }, [polled, msgParam]);
 
-  if (!snapshot) {
+  // First run on a kiosk tablet: the setup screen (the only touch surface).
+  if (configLoaded && pParam === null && (!config || showSetup)) {
+    return (
+      <SetupScreen
+        existing={config}
+        onDone={(c) => {
+          setConfig(c);
+          setShowSetup(false);
+        }}
+      />
+    );
+  }
+
+  if (!snapshot || !configLoaded) {
     // Themed ground until the first snapshot (stored or live) arrives —
     // never a blank white frame (R12).
     return <Screen theme="night">{null}</Screen>;
   }
 
   return (
-    <PlayerView
-      snapshot={snapshot}
-      position={position}
-      clock={clock}
-      seasonOverride={seasonOverride}
-    />
+    <>
+      {gestureFired && config && (
+        <PinGate
+          expectedPin={config.pin}
+          onPass={() => {
+            resetGesture();
+            setShowSetup(true);
+          }}
+          onCancel={resetGesture}
+        />
+      )}
+      <PlayerView
+        snapshot={snapshot}
+        position={position}
+        clock={clock}
+        seasonOverride={seasonOverride}
+      />
+    </>
   );
 }
 

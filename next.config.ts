@@ -7,6 +7,11 @@ initOpenNextCloudflareForDev();
 const withSerwist = withSerwistInit({
   swSrc: "src/player/sw.ts",
   swDest: "public/sw.js",
+  // Precache the player document at SW install so a tablet that reboots
+  // offline can still open the wall (R11). Revision ties it to the deploy.
+  additionalPrecacheEntries: [
+    { url: "/player", revision: process.env.BUILD_ID ?? "dev" },
+  ],
 });
 
 const nextConfig: NextConfig = {
