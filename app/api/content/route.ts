@@ -19,7 +19,11 @@ export async function GET(request: Request) {
   const db = getDb();
   const { snapshot, etag } = await buildSnapshot(db, Date.now());
 
-  if (request.headers.get("if-none-match") === etag) {
+  // Cloudflare may rewrite the ETag to its weak form (W/"...") on the way
+  // out; normalize both sides or production 304s silently stop happening.
+  const normalize = (v: string | null) =>
+    v ? v.replace(/^W\//, "") : null;
+  if (normalize(request.headers.get("if-none-match")) === etag) {
     return new Response(null, {
       status: 304,
       headers: { ETag: etag, "Cache-Control": "no-store" },
