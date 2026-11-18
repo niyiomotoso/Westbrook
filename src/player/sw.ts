@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 import { defaultCache } from "@serwist/next/worker";
 import type { PrecacheEntry, SerwistGlobalConfig } from "serwist";
-import { Serwist } from "serwist";
+import { CacheFirst, NetworkOnly, Serwist } from "serwist";
 
 declare global {
   interface WorkerGlobalScope extends SerwistGlobalConfig {
@@ -18,7 +18,22 @@ const serwist = new Serwist({
   skipWaiting: false,
   clientsClaim: true,
   navigationPreload: true,
-  runtimeCaching: defaultCache,
+  runtimeCaching: [
+    {
+      // Content-hashed, immutable images: cache-first forever. This cache
+      // is also the R27 pre-download target — "downloaded" and "cached"
+      // are the same fact.
+      matcher: ({ url }) => url.pathname.startsWith("/media/"),
+      handler: new CacheFirst({ cacheName: "wall-media" }),
+    },
+    {
+      // The poll and the clock must never be cached — the poller mirrors
+      // the snapshot to storage itself, and a cached time skews clocks.
+      matcher: ({ url }) => url.pathname.startsWith("/api/"),
+      handler: new NetworkOnly(),
+    },
+    ...defaultCache,
+  ],
 });
 
 self.addEventListener("message", (event) => {
