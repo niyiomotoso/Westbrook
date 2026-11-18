@@ -1,7 +1,7 @@
 ---
 title: "feat: WestBrook reception wall web app"
 type: feat
-status: active
+status: completed
 date: 2026-11-18
 deepened: 2026-11-18
 ---
