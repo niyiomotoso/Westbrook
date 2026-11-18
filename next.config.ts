@@ -7,11 +7,14 @@ initOpenNextCloudflareForDev();
 const withSerwist = withSerwistInit({
   swSrc: "src/player/sw.ts",
   swDest: "public/sw.js",
-  disable: process.env.NODE_ENV === "development",
 });
 
 const nextConfig: NextConfig = {
   images: { unoptimized: true },
 };
 
-export default withSerwist(nextConfig);
+// Dev uses Turbopack (no SW); production builds run webpack via
+// `next build --webpack`, where @serwist/next's injection works.
+export default process.env.NODE_ENV === "development"
+  ? nextConfig
+  : withSerwist(nextConfig);

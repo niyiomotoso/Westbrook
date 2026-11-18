@@ -20,3 +20,13 @@ A reception display system for WestBrook Hotel: three portrait Android tablets s
 2. **Zero budget.** Every service, tier, and tool must be entirely free. Never introduce anything that requires payment or a credit card. If a free tier limit threatens the design, raise it instead of upgrading.
 3. Everything lives in this one repo — player, back office, API, schema, docs.
 4. Phase reports for the owner are plain language, 15 lines or fewer, no code or logs (see brief, section 11).
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+## This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->
