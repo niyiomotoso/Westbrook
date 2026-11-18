@@ -1,0 +1,28 @@
+# deps / build
+node_modules/
+.next/
+.open-next/
+.turbo/
+out/
+
+# local env & secrets — never commit credentials
+.env*
+.dev.vars*
+.cf-account-id
+.wrangler/
+
+# test artifacts
+test-results/
+playwright-report/
+coverage/
+
+# OS
+.DS_Store
+
+# worktrees
+.claude/worktrees/
+
+# generated
+next-env.d.ts
+cloudflare-env.d.ts
+public/sw.js
