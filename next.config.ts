@@ -11,6 +11,11 @@ const withSerwist = withSerwistInit({
 
 const nextConfig: NextConfig = {
   images: { unoptimized: true },
+  env: {
+    // Injected by the deploy workflow (github.sha); drives the player's
+    // boundary-timed SW update check (R17).
+    BUILD_ID: process.env.BUILD_ID ?? "dev",
+  },
 };
 
 // Dev uses Turbopack (no SW); production builds run webpack via

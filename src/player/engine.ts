@@ -6,15 +6,7 @@
  * (docs/SYNC_MODEL.md). No setInterval ever drives visuals.
  */
 
-import { useEffect, useRef, useState } from "react";
-import {
-  CorrectedClock,
-  RESYNC_MS,
-  collectSamples,
-  combineSamples,
-  loadPersistedOffset,
-  saveOffset,
-} from "@/lib/clock-sync";
+import { useEffect, useState } from "react";
 import {
   FADE_MS,
   SLOT_MS,
@@ -28,16 +20,15 @@ import { greetingFor } from "@/lib/greeting";
 import { localParts } from "@/lib/hotel-time";
 import { seasonFor, type Season } from "@/lib/season";
 import type { MessageContent, Snapshot } from "@/lib/snapshot-types";
+import type { WallClock } from "./wall-clock";
 
 export interface EngineState {
   ready: boolean;
   t: number;
-  /** current and incoming slide positions in the active list */
   slideIndex: number;
   incomingIndex: number;
   /** opacity of the incoming layer, 0 outside the cross-fade */
   incomingOpacity: number;
-  /** review index for the current and incoming layers */
   reviewIndex: number;
   incomingReviewIndex: number;
   cityIndex: number;
@@ -78,10 +69,9 @@ export function deriveMessageState(
 export function usePlayerEngine(
   snapshot: Snapshot,
   position: number,
+  clock: WallClock,
   seasonOverride?: Season,
 ): EngineState {
-  const clockRef = useRef<CorrectedClock | null>(null);
-  const pendingSnapRef = useRef<number | null>(null);
   const [state, setState] = useState<EngineState>(() => ({
     ready: false,
     t: 0,
@@ -98,49 +88,6 @@ export function usePlayerEngine(
   }));
 
   useEffect(() => {
-    const clock = new CorrectedClock();
-    clockRef.current = clock;
-    let stopped = false;
-
-    async function sync(first: boolean) {
-      try {
-        const samples = await collectSamples();
-        const est = combineSamples(samples);
-        if (first || !clock.ready) {
-          clock.snap(est.perfOffset);
-        } else if (clock.apply(est.perfOffset) === "snap-requested") {
-          pendingSnapRef.current = est.perfOffset;
-        }
-        saveOffset(est);
-      } catch {
-        if (first && !clock.ready) {
-          const persisted = loadPersistedOffset();
-          // Offline boot: best-effort on the device RTC (R11's stated
-          // exception) — re-anchored at the first successful sync.
-          clock.snap(
-            (persisted?.dateOffset ?? 0) + Date.now() - performance.now(),
-          );
-        }
-      }
-    }
-
-    void sync(true);
-    const resync = setInterval(() => void sync(false), RESYNC_MS);
-    const onVisible = () => {
-      if (document.visibilityState === "visible") void sync(false);
-    };
-    document.addEventListener("visibilitychange", onVisible);
-
-    return () => {
-      stopped = true;
-      clearInterval(resync);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-    // The clock lives for the page's lifetime.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
     let raf = 0;
     let lastKey = "";
     const activeSlides = buildActiveSlides(snapshot);
@@ -148,20 +95,20 @@ export function usePlayerEngine(
     const r = snapshot.reviews.length;
 
     function frame() {
-      const clock = clockRef.current;
-      if (clock && clock.ready) {
-        const tRaw = clock.now();
+      const corrected = clock.clockRef.current;
+      if (corrected && corrected.ready) {
+        const tRaw = corrected.now();
         const { message, epoch } = deriveMessageState(snapshot, tRaw);
         const slot = slotAt(tRaw, epoch);
         const phase = slotPhaseAt(tRaw, epoch);
 
         // Large clock corrections snap only at a boundary (SYNC_MODEL).
-        if (pendingSnapRef.current !== null && phase < 120) {
-          clock.snap(pendingSnapRef.current);
-          pendingSnapRef.current = null;
+        if (clock.pendingSnapRef.current !== null && phase < 120) {
+          corrected.snap(clock.pendingSnapRef.current);
+          clock.pendingSnapRef.current = null;
         }
 
-        const t = clock.now();
+        const t = corrected.now();
         const slideIndex = floorMod(slot + position, n);
         const incomingIndex = floorMod(slot + 1 + position, n);
         const remaining = SLOT_MS - phase;
@@ -195,7 +142,7 @@ export function usePlayerEngine(
           next.greeting,
           next.season,
           next.message?.id ?? "",
-          Math.floor(t / 1000), // time card minute/second ticks
+          Math.floor(t / 1000),
         ].join("|");
         if (key !== lastKey) {
           lastKey = key;
@@ -206,6 +153,8 @@ export function usePlayerEngine(
     }
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
+    // clock is a stable facade of refs
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot, position, seasonOverride]);
 
   return state;

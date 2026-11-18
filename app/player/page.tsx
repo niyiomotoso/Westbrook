@@ -9,8 +9,10 @@ import { SeasonDecor } from "@/player/overlays/SeasonDecor";
 import { TimeCard } from "@/player/overlays/TimeCard";
 import { MessageSlide } from "@/player/slides/MessageSlide";
 import { usePlayerEngine } from "@/player/engine";
-import { sampleSnapshot } from "@/player/fixtures/sample-content";
+import { usePolledSnapshot } from "@/player/poller";
+import { useWallClock } from "@/player/wall-clock";
 import type { Season } from "@/lib/season";
+import type { Snapshot } from "@/lib/snapshot-types";
 
 function PlayerInner() {
   const params = useSearchParams();
@@ -23,13 +25,17 @@ function PlayerInner() {
       ? (seasonParam as Season)
       : undefined;
 
-  // Fixture-mode message demo (?msg=pic|plain): a 12s takeover starting
-  // shortly after load — removed once the real API feeds the player (U6/U9).
+  const clock = useWallClock();
+  const polled = usePolledSnapshot(clock);
+
+  // Message demo override (?msg=pic|plain) — a 12s takeover starting shortly
+  // after load, for QA until the back office posts real messages (U9).
   const msgParam = params.get("msg");
-  const snapshot = useMemo(() => {
-    if (msgParam !== "pic" && msgParam !== "plain") return sampleSnapshot;
+  const snapshot: Snapshot | null = useMemo(() => {
+    if (!polled) return null;
+    if (msgParam !== "pic" && msgParam !== "plain") return polled;
     return {
-      ...sampleSnapshot,
+      ...polled,
       message: {
         id: "demo",
         kicker: "Welcome back",
@@ -43,20 +49,44 @@ function PlayerInner() {
         durationMs: 12000,
       },
     };
-  }, [msgParam]);
-  const engine = usePlayerEngine(snapshot, position, seasonOverride);
-  const slides = engine.activeSlides;
+  }, [polled, msgParam]);
 
-  const current = slides[engine.slideIndex];
-  const incoming = slides[engine.incomingIndex];
-  const showLeftOverlay = position === 0 && current.kind !== "welcome";
-  const city = snapshot.settings.cities[engine.cityIndex];
+  if (!snapshot) {
+    // Themed ground until the first snapshot (stored or live) arrives —
+    // never a blank white frame (R12).
+    return <Screen theme="night">{null}</Screen>;
+  }
+
+  return (
+    <PlayerView
+      snapshot={snapshot}
+      position={position}
+      clock={clock}
+      seasonOverride={seasonOverride}
+    />
+  );
+}
+
+function PlayerView({
+  snapshot,
+  position,
+  clock,
+  seasonOverride,
+}: {
+  snapshot: Snapshot;
+  position: number;
+  clock: ReturnType<typeof useWallClock>;
+  seasonOverride?: Season;
+}) {
+  const engine = usePlayerEngine(snapshot, position, clock, seasonOverride);
+  const slides = engine.activeSlides;
+  const theme = engine.season === "none" ? "night" : engine.season;
 
   // A live message takes over everything (R10): overlays and seasonal
   // garland/snow hide; the theme tint stays (plan decision).
   if (engine.ready && engine.message) {
     return (
-      <Screen theme={engine.season === "none" ? "night" : engine.season}>
+      <Screen theme={theme}>
         <MessageSlide
           message={engine.message}
           hotelName={snapshot.settings.hotelName}
@@ -67,8 +97,14 @@ function PlayerInner() {
     );
   }
 
+  const current = slides[engine.slideIndex];
+  const incoming = slides[engine.incomingIndex];
+  const showLeftOverlay =
+    engine.ready && position === 0 && current.kind !== "welcome";
+  const city = snapshot.settings.cities[engine.cityIndex];
+
   return (
-    <Screen theme={engine.season === "none" ? "night" : engine.season}>
+    <Screen theme={theme}>
       {engine.ready && (
         <>
           <SlideLayer
