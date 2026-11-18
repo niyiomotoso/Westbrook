@@ -1,12 +1,13 @@
 "use client";
 
-import { Suspense } from "react";
+import { Suspense, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { Screen } from "@/player/Screen";
 import { SlideLayer } from "@/player/SlideLayer";
 import { LeftOverlay } from "@/player/overlays/LeftOverlay";
 import { SeasonDecor } from "@/player/overlays/SeasonDecor";
 import { TimeCard } from "@/player/overlays/TimeCard";
+import { MessageSlide } from "@/player/slides/MessageSlide";
 import { usePlayerEngine } from "@/player/engine";
 import { sampleSnapshot } from "@/player/fixtures/sample-content";
 import type { Season } from "@/lib/season";
@@ -22,7 +23,27 @@ function PlayerInner() {
       ? (seasonParam as Season)
       : undefined;
 
-  const snapshot = sampleSnapshot;
+  // Fixture-mode message demo (?msg=pic|plain): a 12s takeover starting
+  // shortly after load — removed once the real API feeds the player (U6/U9).
+  const msgParam = params.get("msg");
+  const snapshot = useMemo(() => {
+    if (msgParam !== "pic" && msgParam !== "plain") return sampleSnapshot;
+    return {
+      ...sampleSnapshot,
+      message: {
+        id: "demo",
+        kicker: "Welcome back",
+        name: msgParam === "plain" ? "Mrs Bello" : "Mr Okafor",
+        body:
+          msgParam === "plain"
+            ? "Everyone at WestBrook wishes you a wonderful day."
+            : "It is a pleasure to have you with us again.",
+        imageUrl: msgParam === "pic" ? "/fixtures/suite.svg" : null,
+        startAt: Date.now() + 4000,
+        durationMs: 12000,
+      },
+    };
+  }, [msgParam]);
   const engine = usePlayerEngine(snapshot, position, seasonOverride);
   const slides = engine.activeSlides;
 
@@ -30,6 +51,21 @@ function PlayerInner() {
   const incoming = slides[engine.incomingIndex];
   const showLeftOverlay = position === 0 && current.kind !== "welcome";
   const city = snapshot.settings.cities[engine.cityIndex];
+
+  // A live message takes over everything (R10): overlays and seasonal
+  // garland/snow hide; the theme tint stays (plan decision).
+  if (engine.ready && engine.message) {
+    return (
+      <Screen theme={engine.season === "none" ? "night" : engine.season}>
+        <MessageSlide
+          message={engine.message}
+          hotelName={snapshot.settings.hotelName}
+          logoUrl={snapshot.settings.logoUrl}
+          tint={engine.season === "xmas" && engine.message.imageUrl !== null}
+        />
+      </Screen>
+    );
+  }
 
   return (
     <Screen theme={engine.season === "none" ? "night" : engine.season}>
