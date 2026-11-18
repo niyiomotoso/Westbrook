@@ -8,8 +8,8 @@ import { hashedKey, validateMediaBytes } from "@/server/media";
 
 export const dynamic = "force-dynamic";
 
-export const POST_NOW_LEAD_MS = 30_000;
-export const CANCEL_CUTOFF_MS = 30_000;
+const POST_NOW_LEAD_MS = 30_000;
+const CANCEL_CUTOFF_MS = 30_000;
 const MIN_DURATION_MS = 8_000;
 const MAX_DURATION_MS = 30_000;
 
