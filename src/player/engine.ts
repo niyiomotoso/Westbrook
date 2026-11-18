@@ -12,6 +12,7 @@ import {
   SLOT_MS,
   cityIndexAt,
   floorMod,
+  reviewIndexForSlot,
   slotAt,
   slotPhaseAt,
 } from "@/lib/loop-math";
@@ -37,16 +38,6 @@ export interface EngineState {
   activeSlides: Slide[];
   /** non-null while a message window is live (R10) */
   message: MessageContent | null;
-}
-
-function reviewIndexForSlot(
-  slot: number,
-  position: number,
-  n: number,
-  r: number,
-): number {
-  if (r <= 0 || n <= 0) return 0;
-  return floorMod(Math.floor((slot + position) / n), r);
 }
 
 /**
@@ -142,7 +133,9 @@ export function usePlayerEngine(
           next.greeting,
           next.season,
           next.message?.id ?? "",
-          Math.floor(t / 1000),
+          // Minute granularity: the time card shows h:mm, so re-rendering
+          // every second was pure waste on a 24/7 tablet (review finding).
+          Math.floor(t / 60_000),
         ].join("|");
         if (key !== lastKey) {
           lastKey = key;

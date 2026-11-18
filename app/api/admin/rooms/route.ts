@@ -76,14 +76,21 @@ export async function PATCH(request: Request) {
   if (!room) return new Response("not found", { status: 404 });
 
   if (body.move === "up" || body.move === "down") {
-    // Up/down buttons are the baseline reorder control (plan UX decision):
-    // swap sort values with the neighbor.
+    // Up/down buttons are the baseline reorder control (plan UX decision).
+    // Renumber the WHOLE list in one atomic batch from a single read —
+    // idempotent, heals duplicate sorts, immune to the double-tap
+    // interleave that made swaps a permanent no-op (review finding).
     const all = await listRooms(db);
     const idx = all.findIndex((r) => r.id === id);
-    const swapWith = body.move === "up" ? all[idx - 1] : all[idx + 1];
-    if (swapWith) {
-      await db.update(rooms).set({ sort: swapWith.sort }).where(eq(rooms.id, id));
-      await db.update(rooms).set({ sort: room.sort }).where(eq(rooms.id, swapWith.id));
+    const to = body.move === "up" ? idx - 1 : idx + 1;
+    if (to >= 0 && to < all.length) {
+      const order = all.slice();
+      [order[idx], order[to]] = [order[to], order[idx]];
+      await db.batch(
+        order.map((r, i) =>
+          db.update(rooms).set({ sort: i }).where(eq(rooms.id, r.id)),
+        ) as unknown as Parameters<typeof db.batch>[0],
+      );
     }
   } else {
     const set: Partial<typeof rooms.$inferInsert> = {};
@@ -126,12 +133,15 @@ export async function DELETE(request: Request) {
 
   const now = Date.now();
   // Deleting a room soft-deletes its photos (they leave via activateAt and
-  // purge after the 24h grace, same as individually deleted photos).
-  await db
-    .update(photos)
-    .set({ deletedAt: now })
-    .where(and(eq(photos.roomId, id), isNull(photos.deletedAt)));
-  await db.delete(rooms).where(eq(rooms.id, id));
+  // purge after the 24h grace). One atomic batch so a partial failure can't
+  // strand photos without their room or vice versa (review finding).
+  await db.batch([
+    db
+      .update(photos)
+      .set({ deletedAt: now })
+      .where(and(eq(photos.roomId, id), isNull(photos.deletedAt))),
+    db.delete(rooms).where(eq(rooms.id, id)),
+  ]);
   await bumpContent(db, now);
   return new Response(null, { status: 204 });
 }

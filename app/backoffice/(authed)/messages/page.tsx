@@ -191,7 +191,8 @@ export default function MessagesPage() {
           />
         </label>
         <label className="ad-label" htmlFor="msg-when">
-          Show from (leave empty to post now)
+          Show from (leave empty to post now — time is in this device&rsquo;s
+          clock)
           <input
             id="msg-when"
             className="ad-input"

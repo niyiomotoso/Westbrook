@@ -40,6 +40,17 @@ export function slideIndexAt(
  * `(slot + floor(slot/N)) mod R` (freezes when R | N+1).
  * One review sweeps across the wall per pass.
  */
+export function reviewIndexForSlot(
+  slot: number,
+  position: number,
+  activeCount: number,
+  reviewCount: number,
+): number {
+  if (reviewCount <= 0) return 0;
+  if (activeCount <= 0) return 0;
+  return floorMod(Math.floor((slot + position) / activeCount), reviewCount);
+}
+
 export function reviewIndexAt(
   t: number,
   epoch: number,
@@ -47,10 +58,7 @@ export function reviewIndexAt(
   activeCount: number,
   reviewCount: number,
 ): number {
-  if (reviewCount <= 0) return 0;
-  if (activeCount <= 0) return 0;
-  const slot = slotAt(t, epoch);
-  return floorMod(Math.floor((slot + position) / activeCount), reviewCount);
+  return reviewIndexForSlot(slotAt(t, epoch), position, activeCount, reviewCount);
 }
 
 /** Milliseconds into the current slot, in [0, SLOT_MS). */

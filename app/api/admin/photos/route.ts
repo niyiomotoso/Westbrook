@@ -1,42 +1,82 @@
-import { and, eq, isNotNull, isNull, lt } from "drizzle-orm";
-import { photos, rooms } from "@/db/schema";
+import { and, eq, inArray, isNotNull, isNull, lt } from "drizzle-orm";
+import { messages, photos, rooms } from "@/db/schema";
 import { PLACE_TAGS, type PlaceTag } from "@/lib/snapshot-types";
 import { requireSession } from "@/server/auth-guard";
-import { PLACE_NAMES, bumpContent } from "@/server/content";
+import { PLACE_NAMES, bumpContent, readSettings } from "@/server/content";
 import { getDb, getEnv } from "@/server/db";
-import { hashedKey, validateMediaBytes } from "@/server/media";
+import { hashedKey, putMedia, validateMediaBytes } from "@/server/media";
 
 export const dynamic = "force-dynamic";
 
 const PURGE_GRACE_MS = 24 * 60 * 60 * 1000;
 
-/** Opportunistic purge: KV objects for photos soft-deleted >24h ago. */
+/**
+ * Opportunistic purge of KV objects for photos soft-deleted >24h ago.
+ * Batched (review finding: the per-row version was N+1), runs from write
+ * handlers rather than GET (mutations do not belong in GET), and never
+ * deletes a key still referenced by a live photo, an IN-GRACE soft-deleted
+ * photo, a message image, or the current logo (content hashes are shared
+ * across tables — review finding).
+ */
 async function purgeExpired(db: ReturnType<typeof getDb>, env: CloudflareEnv) {
   const cutoff = Date.now() - PURGE_GRACE_MS;
   const expired = await db
-    .select()
+    .select({ id: photos.id, mediaKey: photos.mediaKey })
     .from(photos)
     .where(and(isNotNull(photos.deletedAt), lt(photos.deletedAt, cutoff)))
     .all();
-  for (const p of expired) {
-    const stillUsed = await db
-      .select({ id: photos.id })
+  if (expired.length === 0) return;
+
+  const expiredKeys = [...new Set(expired.map((p) => p.mediaKey))];
+  const [keepPhotos, keepMessages, wall] = await Promise.all([
+    db
+      .select({ mediaKey: photos.mediaKey })
       .from(photos)
-      .where(and(eq(photos.mediaKey, p.mediaKey), isNull(photos.deletedAt)))
-      .get();
-    if (!stillUsed) {
-      await env.MEDIA.delete(p.mediaKey);
-    }
-    await db.delete(photos).where(eq(photos.id, p.id));
+      .where(
+        and(
+          inArray(photos.mediaKey, expiredKeys),
+          // live, or soft-deleted but still inside the grace window
+          isNull(photos.deletedAt),
+        ),
+      )
+      .all(),
+    db
+      .select({ mediaKey: messages.mediaKey })
+      .from(messages)
+      .where(isNotNull(messages.mediaKey))
+      .all(),
+    readSettings(db),
+  ]);
+  const protectedKeys = new Set<string>([
+    ...keepPhotos.map((r) => r.mediaKey),
+    ...keepMessages.map((r) => r.mediaKey ?? ""),
+  ]);
+  const logoKey = wall.logoUrl?.replace("/media/", "");
+  if (logoKey) protectedKeys.add(logoKey);
+  // Soft-deleted rows still inside the grace window share their key's
+  // protection: anything deleted-but-not-expired is not in expiredIds.
+  const expiredIds = new Set(expired.map((p) => p.id));
+  const graceRows = await db
+    .select({ id: photos.id, mediaKey: photos.mediaKey })
+    .from(photos)
+    .where(and(isNotNull(photos.deletedAt), inArray(photos.mediaKey, expiredKeys)))
+    .all();
+  for (const r of graceRows) {
+    if (!expiredIds.has(r.id)) protectedKeys.add(r.mediaKey);
   }
+
+  for (const key of expiredKeys) {
+    if (!protectedKeys.has(key)) {
+      await env.MEDIA.delete(key).catch(() => {});
+    }
+  }
+  await db.delete(photos).where(inArray(photos.id, [...expiredIds]));
 }
 
 export async function GET() {
   const denied = await requireSession();
   if (denied) return denied;
   const db = getDb();
-  const env = getEnv();
-  await purgeExpired(db, env).catch(() => {});
 
   const [roomRows, photoRows] = await Promise.all([
     db.select().from(rooms).orderBy(rooms.sort).all(),
@@ -96,7 +136,8 @@ export async function POST(request: Request) {
   }
 
   const key = await hashedKey(bytes, validated.ext);
-  await env.MEDIA.put(key, bytes as unknown as ArrayBuffer);
+  await putMedia(env.MEDIA, key, bytes);
+  await purgeExpired(db, env).catch(() => {});
 
   const now = Date.now();
   await db.insert(photos).values({
@@ -126,5 +167,6 @@ export async function DELETE(request: Request) {
   const now = Date.now();
   await db.update(photos).set({ deletedAt: now }).where(eq(photos.id, id));
   await bumpContent(db, now);
+  await purgeExpired(db, getEnv()).catch(() => {});
   return new Response(null, { status: 204 });
 }

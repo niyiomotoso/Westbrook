@@ -63,3 +63,12 @@ export async function hashedKey(
     .slice(0, 32);
   return `${hex}.${ext}`;
 }
+
+/** Central KV write so routes share one (typed) put path. */
+export async function putMedia(
+  media: KVNamespace,
+  key: string,
+  bytes: Uint8Array,
+): Promise<void> {
+  await media.put(key, bytes.buffer as ArrayBuffer);
+}

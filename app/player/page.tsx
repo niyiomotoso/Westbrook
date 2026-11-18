@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { loadPlayerConfig, type PlayerConfig } from "@/player/config";
 import { useKiosk } from "@/player/kiosk";
 import { PinGate, SetupScreen } from "@/player/setup";
+import { PlayerErrorBoundary } from "@/player/PlayerErrorBoundary";
 import { Screen } from "@/player/Screen";
 import { SlideLayer } from "@/player/SlideLayer";
 import { LeftOverlay } from "@/player/overlays/LeftOverlay";
@@ -168,17 +169,18 @@ function PlayerView({
             snapshot={snapshot}
             opacity={1}
           />
-          {engine.incomingOpacity > 0 && (
-            <SlideLayer
-              slide={incoming}
-              slideIndex={engine.incomingIndex}
-              total={slides.length}
-              reviewIndex={engine.incomingReviewIndex}
-              season={engine.season}
-              snapshot={snapshot}
-              opacity={engine.incomingOpacity}
-            />
-          )}
+          {/* Incoming layer stays mounted at opacity 0 — no unmount/remount
+              churn each slot, and the next slide's DOM is always warm
+              (review finding; also strengthens R12 preloading). */}
+          <SlideLayer
+            slide={incoming}
+            slideIndex={engine.incomingIndex}
+            total={slides.length}
+            reviewIndex={engine.incomingReviewIndex}
+            season={engine.season}
+            snapshot={snapshot}
+            opacity={engine.incomingOpacity}
+          />
           {showLeftOverlay && (
             <LeftOverlay
               hotelName={snapshot.settings.hotelName}
@@ -196,8 +198,10 @@ function PlayerView({
 
 export default function PlayerPage() {
   return (
-    <Suspense fallback={null}>
-      <PlayerInner />
-    </Suspense>
+    <PlayerErrorBoundary>
+      <Suspense fallback={null}>
+        <PlayerInner />
+      </Suspense>
+    </PlayerErrorBoundary>
   );
 }

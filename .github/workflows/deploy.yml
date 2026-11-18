@@ -11,6 +11,8 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # A wedged step must free the serialized deploy-main queue (review note)
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 

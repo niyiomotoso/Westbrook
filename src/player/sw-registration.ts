@@ -23,11 +23,22 @@ export function registerPlayerSw() {
 }
 
 let updateScheduled = false;
+// If no reload happened within this window, release the latch so later
+// polls can retry — a failed SW install must never strand the device on a
+// stale build (review P1).
+const UPDATE_RETRY_MS = 120_000;
+
+function armRetryRelease() {
+  setTimeout(() => {
+    updateScheduled = false;
+  }, UPDATE_RETRY_MS);
+}
 
 /**
  * Called by the poller when the server's buildId differs from ours.
  * Flow: update the registration → SKIP_WAITING the fresh worker → reload
  * at the next slide boundary (the manifest/body background masks the gap).
+ * Every failure path releases the latch so the next poll retries.
  */
 export function scheduleUpdateReload(
   now: () => number,
@@ -35,6 +46,7 @@ export function scheduleUpdateReload(
 ): void {
   if (updateScheduled) return;
   updateScheduled = true;
+  armRetryRelease();
 
   const reloadAtBoundary = () => {
     const t = now();
@@ -49,33 +61,33 @@ export function scheduleUpdateReload(
     return;
   }
 
+  const activateWaiting = (reg: ServiceWorkerRegistration) => {
+    if (!reg.waiting) return false;
+    navigator.serviceWorker.addEventListener(
+      "controllerchange",
+      reloadAtBoundary,
+      { once: true },
+    );
+    reg.waiting.postMessage({ type: "SKIP_WAITING" });
+    return true;
+  };
+
   navigator.serviceWorker
     .getRegistration()
     .then(async (reg) => {
       if (!reg) return reloadAtBoundary();
       await reg.update().catch(() => {});
-      const fresh = reg.waiting ?? reg.installing;
-      if (reg.waiting) {
-        navigator.serviceWorker.addEventListener(
-          "controllerchange",
-          reloadAtBoundary,
-          { once: true },
-        );
-        reg.waiting.postMessage({ type: "SKIP_WAITING" });
-      } else if (fresh) {
-        fresh.addEventListener("statechange", () => {
-          if (reg.waiting) {
-            navigator.serviceWorker.addEventListener(
-              "controllerchange",
-              reloadAtBoundary,
-              { once: true },
-            );
-            reg.waiting.postMessage({ type: "SKIP_WAITING" });
-          }
-        });
-      } else {
-        reloadAtBoundary();
-      }
+      if (activateWaiting(reg)) return;
+      const fresh = reg.installing;
+      if (!fresh) return reloadAtBoundary();
+      fresh.addEventListener("statechange", () => {
+        if (fresh.state === "redundant") {
+          // Install failed — release the latch so the next poll retries.
+          updateScheduled = false;
+          return;
+        }
+        activateWaiting(reg);
+      });
     })
     .catch(reloadAtBoundary);
 }

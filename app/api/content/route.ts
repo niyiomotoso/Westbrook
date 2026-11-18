@@ -1,3 +1,4 @@
+import { normalizeEtag } from "@/lib/etag";
 import { buildSnapshot } from "@/server/content";
 import { getDb, getEnv } from "@/server/db";
 import { checkRateLimit, tooManyRequests } from "@/server/rate-limit";
@@ -21,9 +22,7 @@ export async function GET(request: Request) {
 
   // Cloudflare may rewrite the ETag to its weak form (W/"...") on the way
   // out; normalize both sides or production 304s silently stop happening.
-  const normalize = (v: string | null) =>
-    v ? v.replace(/^W\//, "") : null;
-  if (normalize(request.headers.get("if-none-match")) === etag) {
+  if (normalizeEtag(request.headers.get("if-none-match")) === etag) {
     return new Response(null, {
       status: 304,
       headers: { ETag: etag, "Cache-Control": "no-store" },

@@ -1,3 +1,4 @@
+import { eq, lt } from "drizzle-orm";
 import { screens } from "@/db/schema";
 import { getDb, getEnv } from "@/server/db";
 import { checkRateLimit, tooManyRequests } from "@/server/rate-limit";
@@ -33,13 +34,30 @@ export async function POST(request: Request) {
   }
 
   const db = getDb();
+  const now = Date.now();
+  // Skip the write when nothing but a fresh lastSeen moved (<55s) — keeps
+  // abusive or over-eager heartbeats off the 100k/day D1 write budget.
+  const existing = await db.select().from(screens).where(eq(screens.key, key)).get();
+  if (
+    existing &&
+    existing.position === position &&
+    existing.buildId === buildId &&
+    now - existing.lastSeen < 55_000
+  ) {
+    return new Response(null, { status: 204 });
+  }
   await db
     .insert(screens)
-    .values({ key, position, lastSeen: Date.now(), buildId })
+    .values({ key, position, lastSeen: now, buildId })
     .onConflictDoUpdate({
       target: screens.key,
-      set: { position, lastSeen: Date.now(), buildId },
+      set: { position, lastSeen: now, buildId },
     });
+  // Prune keys silent for 7+ days so the table (and the admin strip) can't
+  // grow without bound (review finding).
+  await db
+    .delete(screens)
+    .where(lt(screens.lastSeen, now - 7 * 24 * 60 * 60 * 1000));
 
   return new Response(null, { status: 204 });
 }

@@ -40,9 +40,12 @@ because nothing is counted locally — everything is a pure function of time.
 ## The poll contract
 
 `GET /api/content` returns **one idempotent full snapshot** every 15 s
-(ETag `"v{n}"` + `If-None-Match` → tiny 304s; `Cache-Control: no-store`):
+(`Cache-Control: no-store`; composite ETag
+`"v{version}.{epoch}.{messageId:startAt|none}.{buildId}"` + `If-None-Match`
+→ tiny 304s — the ETag must cover everything a player acts on, buildId
+included, or deploys hide behind 304s):
 
-- content (rooms, photos, reviews, settings, templates)
+- content (rooms, photos, reviews, settings — templates stay admin-only)
 - `loop_epoch` E — **rides every poll**; a device that slept through an
   epoch reset adopts the new E at its next boundary and self-heals
 - `content_version` and `activateAt`

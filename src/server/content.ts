@@ -16,6 +16,8 @@ import type {
 import { PLACE_TAGS } from "@/lib/snapshot-types";
 import type { Db } from "./db";
 
+import { sql } from "drizzle-orm";
+import { composeEtag } from "@/lib/etag";
 import { computeEffectiveEpoch, pickVisibleMessage } from "@/lib/message-logic";
 
 export const ACTIVATE_LEAD_MS = 30_000;
@@ -71,10 +73,19 @@ async function writeMeta(db: Db, key: string, value: string) {
     .onConflictDoUpdate({ target: meta.key, set: { value } });
 }
 
-/** Admin writes call this: bump version, stamp activateAt (edits coalesce). */
+/**
+ * Admin writes call this: bump version, stamp activateAt (edits coalesce).
+ * The increment happens SQL-side so concurrent admin writes can't lose a
+ * version to a read-modify-write race (review finding).
+ */
 export async function bumpContent(db: Db, now: number) {
-  const version = (await readMetaNumber(db, "content_version", 1)) + 1;
-  await writeMeta(db, "content_version", String(version));
+  await db
+    .insert(meta)
+    .values({ key: "content_version", value: "2" })
+    .onConflictDoUpdate({
+      target: meta.key,
+      set: { value: sql`CAST(${meta.value} AS INTEGER) + 1` },
+    });
   await writeMeta(db, "activate_at", String(now + ACTIVATE_LEAD_MS));
 }
 
@@ -210,8 +221,8 @@ export async function buildSnapshot(
     message,
   };
 
-  // The ETag covers everything that can change what a player renders
-  // without a version bump: epoch resets and message window visibility.
-  const etag = `"v${version}.${epoch}.${message ? `${message.id}:${message.startAt}` : "none"}"`;
+  // The ETag covers everything that can change what a player renders or
+  // does: version, epoch resets, message visibility, and the deploy build.
+  const etag = composeEtag(version, epoch, message, buildIdentifier());
   return { snapshot, etag };
 }

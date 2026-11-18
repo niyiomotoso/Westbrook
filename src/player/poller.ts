@@ -20,7 +20,9 @@ import type { WallClock } from "./wall-clock";
 
 export const POLL_MS = 15_000;
 const SNAPSHOT_STORAGE_KEY = "westbrook.snapshot.v1";
-const PREFETCH_RETRY_MS = 10_000;
+// Exponential backoff for failed image prefetches: 10s, 20s, 40s ... 5min cap
+const PREFETCH_BASE_MS = 10_000;
+const PREFETCH_MAX_MS = 300_000;
 
 function loadStoredSnapshot(): Snapshot | null {
   try {
@@ -62,6 +64,7 @@ export function usePolledSnapshot(clock: WallClock): Snapshot | null {
   const pendingRef = useRef<Snapshot | null>(null);
   const pendingReadyRef = useRef(false);
   const lastPrefetchRef = useRef(0);
+  const prefetchAttemptsRef = useRef(0);
   const etagRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -69,9 +72,17 @@ export function usePolledSnapshot(clock: WallClock): Snapshot | null {
     registerPlayerSw();
 
     function apply(next: Snapshot) {
+      const prev = currentRef.current;
       currentRef.current = next;
       setCurrent(next);
       storeSnapshot(next);
+      // A message image must be cached before its startAt even though the
+      // message bypasses content activation (review finding): prefetch it
+      // the moment the window enters the snapshot.
+      const img = next.message?.imageUrl;
+      if (img && img !== prev?.message?.imageUrl) {
+        fetch(img).catch(() => {});
+      }
     }
 
     function startPrefetch(next: Snapshot) {
@@ -79,8 +90,16 @@ export function usePolledSnapshot(clock: WallClock): Snapshot | null {
       void prefetchImages(next).then((ok) => {
         if (pendingRef.current?.contentVersion === next.contentVersion) {
           pendingReadyRef.current = ok;
+          prefetchAttemptsRef.current = ok ? 0 : prefetchAttemptsRef.current + 1;
         }
       });
+    }
+
+    function prefetchRetryDelay(): number {
+      return Math.min(
+        PREFETCH_BASE_MS * 2 ** prefetchAttemptsRef.current,
+        PREFETCH_MAX_MS,
+      );
     }
 
     function maybeScheduleUpdate(next: Snapshot) {
@@ -95,7 +114,11 @@ export function usePolledSnapshot(clock: WallClock): Snapshot | null {
       try {
         const headers: Record<string, string> = {};
         if (etagRef.current) headers["If-None-Match"] = etagRef.current;
-        const res = await fetch("/api/content", { headers, cache: "no-store" });
+        const res = await fetch("/api/content", {
+          headers,
+          cache: "no-store",
+          signal: AbortSignal.timeout(8000),
+        });
         if (stopped) return;
         if (res.status === 304) return;
         if (!res.ok) return;
@@ -141,13 +164,21 @@ export function usePolledSnapshot(clock: WallClock): Snapshot | null {
       const cur = currentRef.current;
       if (!pending) return;
       if (!pendingReadyRef.current) {
-        if (Date.now() - lastPrefetchRef.current > PREFETCH_RETRY_MS) {
+        if (Date.now() - lastPrefetchRef.current > prefetchRetryDelay()) {
           startPrefetch(pending);
         }
         return;
       }
-      const epoch = cur?.loopEpoch ?? pending.loopEpoch;
       const t = clock.now();
+      // Activation boundaries use the EFFECTIVE epoch: a message's end is a
+      // loop boundary for pending content (SYNC_MODEL), so align with the
+      // same derivation the engine renders with.
+      let epoch = cur?.loopEpoch ?? pending.loopEpoch;
+      const liveMsg = cur?.message;
+      if (liveMsg) {
+        const end = liveMsg.startAt + liveMsg.durationMs;
+        if (t >= end && end > epoch) epoch = end;
+      }
       if (t >= boundaryAtOrAfter(pending.activateAt, epoch)) {
         pendingRef.current = null;
         pendingReadyRef.current = false;

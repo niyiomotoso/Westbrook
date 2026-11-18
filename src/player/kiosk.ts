@@ -60,6 +60,9 @@ export function useKiosk(
     if (!config) return;
 
     function onPointerDown(e: PointerEvent) {
+      // A second pointer while holding must not orphan the first timer
+      // (review finding: the overwritten timer could pop the gate alone).
+      if (holdTimer.current) return;
       if (e.clientX <= CORNER_PX && e.clientY <= CORNER_PX) {
         holdTimer.current = setTimeout(() => setGestureFired(true), HOLD_MS);
       }
@@ -74,18 +77,19 @@ export function useKiosk(
       e.preventDefault();
     }
 
-    window.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("pointerup", cancelHold);
-    window.addEventListener("pointercancel", cancelHold);
-    window.addEventListener("pointermove", (e) => {
+    function onPointerMove(e: PointerEvent) {
       if (
         holdTimer.current &&
-        ((e as PointerEvent).clientX > CORNER_PX ||
-          (e as PointerEvent).clientY > CORNER_PX)
+        (e.clientX > CORNER_PX || e.clientY > CORNER_PX)
       ) {
         cancelHold();
       }
-    });
+    }
+
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("pointerup", cancelHold);
+    window.addEventListener("pointercancel", cancelHold);
+    window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("contextmenu", swallow);
     document.documentElement.style.touchAction = "none";
     document.documentElement.style.userSelect = "none";
@@ -95,6 +99,7 @@ export function useKiosk(
       window.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("pointerup", cancelHold);
       window.removeEventListener("pointercancel", cancelHold);
+      window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("contextmenu", swallow);
       document.documentElement.style.touchAction = "";
       document.documentElement.style.userSelect = "";

@@ -72,6 +72,11 @@ export async function PUT(request: Request) {
   }
   const result = sanitize(body);
   if (typeof result === "string") return new Response(result, { status: 400 });
+  // The logo endpoints own logoUrl: a settings save must not silently
+  // revert a logo uploaded after this form loaded (review finding —
+  // last-writer-wins on the shared JSON row).
+  const stored = await readSettings(db);
+  result.logoUrl = stored.logoUrl;
 
   await db
     .insert(settings)

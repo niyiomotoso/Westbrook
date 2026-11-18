@@ -1,17 +1,15 @@
 import { and, asc, desc, eq, gt } from "drizzle-orm";
 import { messages, templates } from "@/db/schema";
-import { overlaps } from "@/lib/message-logic";
+import { clampDurationMs, needsGuestName, overlaps, paddedWindow } from "@/lib/message-logic";
 import { requireSession } from "@/server/auth-guard";
 import { SCHEDULE_MIN_LEAD_MS } from "@/server/content";
 import { getDb, getEnv } from "@/server/db";
-import { hashedKey, validateMediaBytes } from "@/server/media";
+import { PHOTO_MAX_BYTES, hashedKey, putMedia, validateMediaBytes } from "@/server/media";
 
 export const dynamic = "force-dynamic";
 
 const POST_NOW_LEAD_MS = 30_000;
 const CANCEL_CUTOFF_MS = 30_000;
-const MIN_DURATION_MS = 8_000;
-const MAX_DURATION_MS = 30_000;
 
 export async function GET() {
   const denied = await requireSession();
@@ -63,14 +61,11 @@ export async function POST(request: Request) {
     return new Response("kicker and message text are required", { status: 400 });
   }
   // {name} templates require a name (plan decision — no dangling commas).
-  if (text.includes("{name}") && !name) {
+  if (needsGuestName(text, name)) {
     return new Response("this message needs the guest's name", { status: 400 });
   }
 
-  const durationS = Number(body.durationS ?? 12);
-  const durationMs = Math.round(
-    Math.min(MAX_DURATION_MS, Math.max(MIN_DURATION_MS, durationS * 1000)),
-  );
+  const durationMs = clampDurationMs(body.durationS);
 
   const now = Date.now();
   let startAt: number;
@@ -89,7 +84,9 @@ export async function POST(request: Request) {
     }
   }
 
-  const candidate = { startAt, durationMs };
+  // Pad the candidate by the gap so schedules too close to another window
+  // are rejected with the same 409 as true overlaps (review finding).
+  const candidate = paddedWindow(startAt, durationMs);
   const upcoming = await db
     .select()
     .from(messages)
@@ -108,16 +105,27 @@ export async function POST(request: Request) {
 
   let mediaKey: string | null = null;
   if (typeof body.imageBase64 === "string" && body.imageBase64) {
-    const bytes = Uint8Array.from(atob(body.imageBase64), (c) => c.charCodeAt(0));
+    // Size-check BEFORE decoding and survive malformed base64 (review
+    // finding: unbounded atob + unhandled 500).
+    if (body.imageBase64.length > Math.ceil((PHOTO_MAX_BYTES * 4) / 3) + 4) {
+      return new Response("picture over 2 MB", { status: 400 });
+    }
+    let bytes: Uint8Array;
+    try {
+      bytes = Uint8Array.from(atob(body.imageBase64), (c) => c.charCodeAt(0));
+    } catch {
+      return new Response("picture data is not valid base64", { status: 400 });
+    }
     const validated = validateMediaBytes("photo", bytes);
     if ("error" in validated) return new Response(validated.error, { status: 400 });
     mediaKey = await hashedKey(bytes, validated.ext);
-    await env.MEDIA.put(mediaKey, bytes as unknown as ArrayBuffer);
+    await putMedia(env.MEDIA, mediaKey, bytes);
   }
 
   const substituted = text.replaceAll("{name}", name || "");
+  const id = crypto.randomUUID();
   await db.insert(messages).values({
-    id: crypto.randomUUID(),
+    id,
     kicker,
     name,
     body: substituted,
@@ -127,6 +135,27 @@ export async function POST(request: Request) {
     canceled: 0,
     createdAt: now,
   });
+  // TOCTOU guard (review finding): two concurrent posts can both pass the
+  // pre-insert check. Re-check after insert; the later creation loses.
+  const conflicting = await db
+    .select()
+    .from(messages)
+    .where(and(eq(messages.canceled, 0), gt(messages.startAt, now - 86_400_000)))
+    .all();
+  for (const m of conflicting) {
+    if (m.id === id) continue;
+    if (m.startAt + m.durationMs <= now) continue;
+    if (!overlaps(candidate, m)) continue;
+    // Deterministic loser: later createdAt (tie-broken by id) backs out.
+    const iLose = m.createdAt < now || (m.createdAt === now && m.id < id);
+    if (iLose) {
+      await db.delete(messages).where(eq(messages.id, id));
+      return new Response(
+        "another message was scheduled at the same moment — try a later time",
+        { status: 409 },
+      );
+    }
+  }
   // No content bump needed: message visibility rides the ETag directly.
   return Response.json({ startAt, durationMs }, { status: 201 });
 }

@@ -2,7 +2,7 @@ import { settings } from "@/db/schema";
 import { requireSession } from "@/server/auth-guard";
 import { bumpContent, readSettings } from "@/server/content";
 import { getDb, getEnv } from "@/server/db";
-import { hashedKey, validateMediaBytes } from "@/server/media";
+import { hashedKey, putMedia, validateMediaBytes } from "@/server/media";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +20,7 @@ export async function POST(request: Request) {
   }
 
   const key = await hashedKey(bytes, validated.ext);
-  await env.MEDIA.put(key, bytes as unknown as ArrayBuffer);
+  await putMedia(env.MEDIA, key, bytes);
 
   const current = await readSettings(db);
   const next = { ...current, logoUrl: `/media/${key}` };

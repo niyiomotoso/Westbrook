@@ -41,7 +41,7 @@
         "type": "ratelimit",
         "name": "PUBLIC_RL",
         "namespace_id": "1002",
-        "simple": { "limit": 120, "period": 60 }
+        "simple": { "limit": 600, "period": 60 }
       }
     ]
   },

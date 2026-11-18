@@ -142,7 +142,10 @@ export async function collectSamples(
   for (let i = 0; i < count; i++) {
     try {
       const sentAt = perfNow();
-      const res = await fetchFn("/api/time", { cache: "no-store" });
+      const res = await fetchFn("/api/time", {
+        cache: "no-store",
+        signal: AbortSignal.timeout(5000),
+      });
       const receivedAt = perfNow();
       const clientDateNow = dateNow();
       if (!res.ok) continue;
